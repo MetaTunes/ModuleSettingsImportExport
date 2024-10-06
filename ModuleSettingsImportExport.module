@@ -103,7 +103,16 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
     }
 
     protected function importSettings() {
-        $moduleSettings = json_decode($this->wire('input')->post->moduleSettings, true);
+		$moduleJsonSettings = $this->wire('input')->post->moduleSettings;
+        $moduleSettings = json_decode($moduleJsonSettings, true);
+		if($this->data['useNames']) {
+			$moduleSettings = json_decode($this->convertJsonRefs($moduleJsonSettings, 'name', 'id'), true);
+		}
+		if(!is_array($moduleSettings)) {
+			$this->wire()->error('The pasted settings are not in a valid JSON format and can\'t be imported.');
+			$this->openSettings = true;
+			return;
+		}
         $moduleName = key($moduleSettings);
         if($moduleName !== $this->moduleName) {
             $this->wire()->error('The pasted settings are for the ' . $moduleName . ' module, and not the ' . $this->moduleName . ' module and can\'t be imported.');
@@ -180,6 +189,9 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
             $moduleConfigData[$this->moduleName]['version'] = $this->moduleVersion;
             $moduleConfigData[$this->moduleName]['settings'] = $this->wire('modules')->getModuleConfigData($this->moduleName);
             $f->value = json_encode($moduleConfigData);
+			if($this->data['useNames']) {
+				$f->value = $this->convertJsonRefs($f->value, 'id', 'name');
+			}
         }
         $form->add($f);
 
@@ -248,6 +260,14 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
         $f->description = __('If checked, settings will be saved when any module is uninstalled.', __FILE__);
         $f->attr('checked', $data['backupSettingsOnUninstall'] == '1' ? 'checked' : '' );
         $wrapper->add($f);
+
+		$f = $this->wire('modules')->get("InputfieldCheckbox");
+		$f->attr('name', 'useNames');
+		$f->label = __('Use names/paths rather than ids in export/import json (Experimental)', __FILE__);
+		$f->description = __('If checked, all exports will reference names/paths rather than ids and all imports will expect names/paths.', __FILE__);
+		$f->notes = __('If checked, imports using ids might work but cannot be guaranteed.', __FILE__);
+		$f->attr('checked', $data['useNames'] == '1' ? 'checked' : '' );
+		$wrapper->add($f);
 
         if(isset($data['moduleSettings'])) {
             $fieldset = $this->wire('modules')->get("InputfieldFieldset");
@@ -328,5 +348,155 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
         return $wrapper;
 
     }
+
+
+	/*
+	 * Method to convert json string with ids into one that uses names/paths instead and vice-versa
+	 * @param string $json
+	 * @param string $from - 'id' or 'name'
+	 * @param string $to - 'id' or 'name'
+	 *
+	 * @return string
+	 */
+	public function convertJsonRefs($json, $from, $to) {
+		$pageTo = ($to == 'name') ? 'path' : 'id';
+		/***************************************************************
+		 * This first section deals with data in the module settings of the form xxx=yyy
+		 **************************************************************/
+		$matches = [];
+		if($from == 'id' && $to == 'name') {
+			/* The following regex pattern is designed to match occurrences of words like xxx{comparator}yyy where yyy is an integer or a pipe-separated list of integers, and yyy is not 0.
+			Here's a breakdown of the pattern:
+			"?([^",]+?)"?: Matches an optional leading double quote, followed by one or more characters that are not double quotes or commas, and an optional trailing double quote. This captures the xxx part.
+			\s*(=|!=)\s*: Matches zero or more whitespace characters, followed by either = or !=, and then zero or more whitespace characters. This captures the comparator.
+			(?!0\b)(\d+(?:\|(?!0\b)\d+)*): Uses a negative lookahead (?!0\b) to ensure that yyy is not 0. Then, it matches one or more digits followed by zero or more occurrences of | and digits, ensuring none of the digits are 0.
+			(?=[,"]): Positive lookahead to ensure that the match is followed by a comma or a double quote.
+			This pattern ensures that yyy is a non-zero integer or a pipe-separated list of non-zero integers. */
+			$pattern = '/"?([^",]+?)"?\s*(=|!=)\s*(?!0\b)(\d+(?:\|(?!0\b)\d+)*)(?=[,"])/';
+		} else {
+			/* The following regex pattern is designed to match occurrences of words like xxx{comparator}yyy where yyy is an alphanumeric string that may include slashes, hyphens, underscores, or be a pipe-separated list of such strings.
+			Here's a breakdown of the pattern:
+			"?([^",]+?)"?: Matches an optional leading double quote, followed by one or more characters that are not double quotes or commas, and an optional trailing double quote. This captures the xxx part.
+			\s*(=|!=)\s*: Matches zero or more whitespace characters, followed by either = or !=, and then zero or more whitespace characters. This captures the comparator.
+			([a-zA-Z0-9\/_-]+(?:\|[a-zA-Z0-9\/_-]+)*): Matches one or more alphanumeric characters, slashes, hyphens, or underscores, followed by zero or more occurrences of | and similar characters. This captures the yyy part.
+			(?=[,"]): Positive lookahead to ensure that the match is followed by a comma or a double quote.
+			This pattern ensures that yyy can be a single alphanumeric string or a pipe-separated list of such strings. */
+			$pattern = '/"?([^",]+?)"?\s*(=|!=)\s*([a-zA-Z0-9\/_-]+(?:\|[a-zA-Z0-9\/_-]+)*)(?=[,"])/';
+		}
+		// Find all matches
+		preg_match_all($pattern, $json, $matches, PREG_SET_ORDER);
+
+		foreach($matches as $match) {
+			$match1 = trim($match[1]);
+			if($match1 == 'template') {
+				$match3 = explode('|', $match[3]);
+				$templates = [];
+				foreach($match3 as $ref) {
+					$template = $this->templates->get($ref);
+					$templates[] = $template->$to;
+				}
+				$templateRef = implode('|', $templates);
+				$replace = $match[1] . $match[2] . $templateRef;
+			} else if($match1 == 'field') {
+				$match3 = explode('|', $match[3]);
+				$fields = [];
+				foreach($match3 as $ref) {
+					$field = $this->fields->get($ref);
+					$fields[] = $field->$to;
+				}
+				$fieldRef = implode('|', $fields);
+				$replace = $match[1] . $match[2] . $fieldRef;
+			} else {
+				$match3 = explode('|', $match[3]);
+				$pages = [];
+				foreach($match3 as $ref) {
+					$page = $this->pages->get($ref);
+					if($match1 == 'parent' || $match1 == 'has_parent') {
+						$pages[] = $page->$pageTo;
+					} else {
+						// If $match[1] contains a dot, the field is just the part after the (last) dot
+						$parts = explode('.', $match1);
+						$field = $this->fields->get($parts[count($parts) - 1]);
+						if(is_a($field, 'ProcessWire\PageField')) {
+							$pages[] = $page->$pageTo;
+						} else {
+//							if($field && !($field->type == 'FieldtypeInteger')) $this->error("Field $match1 is not a page reference field"); // removed as over-aggressive
+							$pages[] = $ref;
+						}
+					}
+				}
+				$replace = $match[1] . $match[2] . implode('|', $pages);
+			}
+			$pattern = '/' . preg_quote(trim($match[0], '",'), '/') . '(?=\b|,|\s|")/';
+			preg_match($pattern, $json, $matches2, PREG_OFFSET_CAPTURE);
+			$json = preg_replace($pattern, $replace, $json);
+		}
+#
+		/*************************************************************
+		 * This next section deals with config fields which take the form xxx: yyy
+		 ***********************************************************/
+		// get the first word inside double quotes in the json string. This should be the module name
+		preg_match('/"([^"]+)"/', $json, $moduleNameMatches);
+		$moduleName = $moduleNameMatches[1];
+		$module = $this->modules->get($moduleName);
+		if(!$module) {
+			$this->error("Module $moduleName is not installed");
+		} else {
+			$matches = [];
+			if($from == 'id' && $to == 'name') {
+				/* This regular expression pattern is designed to match key-value pairs in a JSON string where the value is a number. Here's a breakdown of the pattern:
+				": Matches the opening double quote of the key.
+				([^"]+): Captures one or more characters that are not double quotes (the key) inside a capturing group.
+				": Matches the closing double quote of the key.
+				:: Matches the colon that separates the key and the value.
+				\s*: Matches zero or more whitespace characters.
+				(\d+): Captures one or more digits (the value) inside a capturing group.
+				(?=[,}]): Positive lookahead to ensure that the match is followed by either a comma or a closing curly brace.
+				This ensures that the value is properly terminated in the JSON structure.
+				 */
+				$pattern = '/"([^"]+)":\s*(\d+)(?=[,}])/';
+			} else {
+				/*This regular expression pattern is designed to match key-value pairs in a JSON string where the value is an alphanumeric string that may include slashes, hyphens, or underscores. Here's a breakdown of the pattern:
+				": Matches the opening double quote of the key.
+				([^"]+): Captures one or more characters that are not double quotes (the key) inside a capturing group.
+				": Matches the closing double quote of the key.
+				:: Matches the colon that separates the key and the value.
+				\s*: Matches zero or more whitespace characters.
+				"?([a-zA-Z0-9\/_-]+)"?: Optionally matches a double quote, then captures one or more alphanumeric characters, slashes, hyphens, or underscores (the value) inside a capturing group, and optionally matches a closing double quote.
+				(?=[,}]): Positive lookahead to ensure that the match is followed by either a comma or a closing curly brace.
+				This ensures that the value is properly terminated in the JSON structure.
+				*/
+				$pattern = '/"([^"]+)":\s*"?([a-zA-Z0-9\/_-]+)"?(?=[,}])/';
+			}
+			// find all matches
+			preg_match_all($pattern, $json, $matches, PREG_SET_ORDER);
+			if(count($matches) > 0) {
+				$configData = $this->wire()->modules->getConfig($moduleName);
+				foreach($matches as $match) {
+					if(!isset($configData[$match[1]])) {
+//						$this->error("Field $match[1] is not a config field for module $moduleName"); // removed as over-aggressive
+						continue;
+					}
+					// Get the module config inputfields
+					$moduleClass = get_class($module);
+					$methodChecker = new \ReflectionMethod($moduleClass,'getModuleConfigInputfields');
+					if($methodChecker->isStatic()) {
+						$wrap = $module->getModuleConfigInputfields([]);
+					} else {
+						$wrap = new InputfieldWrapper;
+						$module->getModuleConfigInputfields($wrap);
+					}
+					//
+					// Find the field in the inputfields (as an object)
+					$field = $wrap->get($match[1]);
+					if(is_a($field, 'ProcessWire\InputfieldPage') || is_a($field, 'ProcessWire\InputfieldPageListSelect') || is_a($field, 'ProcessWire\InputfieldPageAutocomplete')) {
+						$page = $this->pages->get($match[2]);
+						$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . '"' . $page->$pageTo . '"', $json);
+					}
+				}
+			}
+		}
+		return $json;
+	}
 
 }
