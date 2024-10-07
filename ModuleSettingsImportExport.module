@@ -446,24 +446,26 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 		if(!$module) {
 			$this->error("Module $moduleName is not installed");
 		} else {
+			$wrap = null;
 			if(!method_exists($module, 'getModuleConfigInputfields')) {
 				$this->warning("Module $moduleName does not have a config method");
-				return $json;
-			}
-			// Get the module config inputfields
-			$moduleClass = get_class($module);
-			$methodChecker = new \ReflectionMethod($moduleClass,'getModuleConfigInputfields');
-			$params = $methodChecker->getParameters();
-			if(!$params[0]) return $json;
-			if(!$params[0]->getType()) {
-				$this->error("Module $moduleName does not have a getModuleConfigInputfields method that accepts a specified parameter type - InputfieldWrapper assumed");
-			}
-			if($params[0]->getType() && $params[0]->getType()->getName() == 'array') {
-				$wrap = $module->getModuleConfigInputfields([]);
 			} else {
-				$wrap = new InputfieldWrapper;
-				$module->getModuleConfigInputfields($wrap);
+				// Get the module config inputfields
+				$moduleClass = get_class($module);
+				$methodChecker = new \ReflectionMethod($moduleClass, 'getModuleConfigInputfields');
+				$params = $methodChecker->getParameters();
+				if(!$params[0]) return $json;
+				if(!$params[0]->getType()) {
+					$this->error("Module $moduleName does not have a getModuleConfigInputfields method that accepts a specified parameter type - InputfieldWrapper assumed");
+				}
+				if($params[0]->getType() && $params[0]->getType()->getName() == 'array') {
+					$wrap = $module->getModuleConfigInputfields([]);
+				} else {
+					$wrap = new InputfieldWrapper;
+					$module->getModuleConfigInputfields($wrap);
+				}
 			}
+			$configData = $this->wire('modules')->getModuleConfigData($moduleName);
 			//
 			$matches = [];
 			if($from == 'id' && $to == 'name') {
@@ -477,7 +479,8 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 				(?=[,}]): Positive lookahead to ensure that the match is followed by either a comma or a closing curly brace.
 				This ensures that the value is properly terminated in the JSON structure.
 				 */
-				$pattern = '/"([^"]+)":\s*(\d+)(?=[,}])/';
+//				$pattern = '/"([^"]+)":\s*(\d+)(?=[,}])/';
+				$pattern = '/"([^"]+)":\s*(\d+|\[\d+(?:,\d+)*\])(?=[,}])/';
 			} else {
 				/*This regular expression pattern is designed to match key-value pairs in a JSON string where the value is an alphanumeric string that may include slashes, hyphens, or underscores. Here's a breakdown of the pattern:
 				": Matches the opening double quote of the key.
@@ -493,18 +496,62 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 			}
 			// find all matches
 			preg_match_all($pattern, $json, $matches, PREG_SET_ORDER);
+
 			if(count($matches) > 0) {
 				foreach($matches as $match) {
-					// Find the field in the inputfields (as an object)
-					$field = $wrap->get($match[1]);
-					if(is_a($field, 'ProcessWire\InputfieldPage') || is_a($field, 'ProcessWire\InputfieldPageListSelect') || is_a($field, 'ProcessWire\InputfieldPageAutocomplete')) {
-						$page = $this->pages->get($match[2]);
-						$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . '"' . $page->$pageTo . '"', $json);
+					if($wrap) {
+						// Find the field in the inputfields (as an object)
+						$field = $wrap->get($match[1]);
+						if(is_a($field, 'ProcessWire\InputfieldPage') || is_a($field, 'ProcessWire\InputfieldPageListSelect') || is_a($field, 'ProcessWire\InputfieldPageAutocomplete')) {
+							$page = $this->pages->get($match[2]);
+							if($page && $page->id) {
+								$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . '"' . $page->$pageTo . '"', $json);
+								unset($configData[$match[1]]);
+							}
+						}
+					}
+					if(isset($configData[$match[1]])) {
+						if(stripos($match[1], 'template') !== false) {
+							$match2 = json_decode($match[2]);
+							if(is_array($match2)) {
+								$templates = [];
+								foreach($match2 as $ref) {
+									$template = $this->templates->get($ref);
+									$templates[] = ($template) ? $template->$to : $ref;
+								}
+								$replace = json_encode($templates);
+								$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . $replace, $json);
+							}
+						}
+						if(stripos($match[1], 'field') !== false) {
+							$match2 = json_decode($match[2]);
+							if(is_array($match2)) {
+								$fields = [];
+								foreach($match2 as $ref) {
+									$field = $this->fields->get($ref);
+									$fields[] = ($field) ? $field->$to : $ref;
+								}
+								$replace = json_encode($fields);
+								$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . $replace, $json);
+							}
+						}
+						if(stripos($match[1], 'page') !== false) {
+							$match2 = json_decode($match[2]);
+							if(is_array($match2)) {
+								$pages = [];
+								foreach($match2 as $ref) {
+									$page = $this->pages->get($ref);
+									$pages[] = ($page && $page->id) ? $page->$to : $ref;
+								}
+								$replace = json_encode($pages);
+								$json = str_replace($match[0], '"' . $match[1] . '"' . ':' . $replace, $json);
+							}
+						}
 					}
 				}
 			}
+			return $json;
 		}
-		return $json;
 	}
 
 }
