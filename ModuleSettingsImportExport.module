@@ -51,7 +51,8 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
      */
     static public function getDefaultData() {
         return array(
-            "backupSettingsOnUninstall" => 1
+            "backupSettingsOnUninstall" => 1,
+			"useNames" => 0
         );
     }
 
@@ -264,8 +265,8 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 		$f = $this->wire('modules')->get("InputfieldCheckbox");
 		$f->attr('name', 'useNames');
 		$f->label = __('Use names/paths rather than ids in export/import json (Experimental)', __FILE__);
-		$f->description = __('If checked, all exports will reference names/paths rather than ids and all imports will expect names/paths.', __FILE__);
-		$f->notes = __('If checked, imports using ids might work but cannot be guaranteed.', __FILE__);
+		$f->description = __('If checked, all exports will reference names/paths rather than ids and all imports will expect names/paths*.', __FILE__);
+		$f->notes = __('If checked, this will apply to individual module export/imports and to multiple settings (below), but NOT to automatic backup settings. (* Imports using ids might work but cannot be guaranteed.)', __FILE__);
 		$f->attr('checked', $data['useNames'] == '1' ? 'checked' : '' );
 		$wrapper->add($f);
 
@@ -318,6 +319,9 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
             $moduleConfigData[$moduleName]['version'] = $moduleInfo['version'];
             $moduleConfigData[$moduleName]['settings'] = $this->wire('modules')->getModuleConfigData($moduleName);
             $moduleSettingsArr[$moduleName] = json_encode($moduleConfigData);
+			if($this->wire('modules')->getModuleConfigData($moduleName) && $data['useNames']) {
+				$moduleSettingsArr[$moduleName] = $this->convertJsonRefs($moduleSettingsArr[$moduleName], 'id', 'name');
+			}
             $f->addOption($moduleName, $moduleName.' ('.$this->wire('modules')->formatVersion($moduleInfo['version']).')');
         }
         $fieldset->add($f);
@@ -442,6 +446,25 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 		if(!$module) {
 			$this->error("Module $moduleName is not installed");
 		} else {
+			if(!method_exists($module, 'getModuleConfigInputfields')) {
+				$this->warning("Module $moduleName does not have a config method");
+				return $json;
+			}
+			// Get the module config inputfields
+			$moduleClass = get_class($module);
+			$methodChecker = new \ReflectionMethod($moduleClass,'getModuleConfigInputfields');
+			$params = $methodChecker->getParameters();
+			if(!$params[0]) return $json;
+			if(!$params[0]->getType()) {
+				$this->error("Module $moduleName does not have a getModuleConfigInputfields method that accepts a specified parameter type - InputfieldWrapper assumed");
+			}
+			if($params[0]->getType() && $params[0]->getType()->getName() == 'array') {
+				$wrap = $module->getModuleConfigInputfields([]);
+			} else {
+				$wrap = new InputfieldWrapper;
+				$module->getModuleConfigInputfields($wrap);
+			}
+			//
 			$matches = [];
 			if($from == 'id' && $to == 'name') {
 				/* This regular expression pattern is designed to match key-value pairs in a JSON string where the value is a number. Here's a breakdown of the pattern:
@@ -471,22 +494,7 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 			// find all matches
 			preg_match_all($pattern, $json, $matches, PREG_SET_ORDER);
 			if(count($matches) > 0) {
-				$configData = $this->wire()->modules->getConfig($moduleName);
 				foreach($matches as $match) {
-					if(!isset($configData[$match[1]])) {
-//						$this->error("Field $match[1] is not a config field for module $moduleName"); // removed as over-aggressive
-						continue;
-					}
-					// Get the module config inputfields
-					$moduleClass = get_class($module);
-					$methodChecker = new \ReflectionMethod($moduleClass,'getModuleConfigInputfields');
-					if($methodChecker->isStatic()) {
-						$wrap = $module->getModuleConfigInputfields([]);
-					} else {
-						$wrap = new InputfieldWrapper;
-						$module->getModuleConfigInputfields($wrap);
-					}
-					//
 					// Find the field in the inputfields (as an object)
 					$field = $wrap->get($match[1]);
 					if(is_a($field, 'ProcessWire\InputfieldPage') || is_a($field, 'ProcessWire\InputfieldPageListSelect') || is_a($field, 'ProcessWire\InputfieldPageAutocomplete')) {
