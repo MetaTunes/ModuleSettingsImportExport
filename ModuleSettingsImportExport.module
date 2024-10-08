@@ -266,7 +266,7 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 		$f->attr('name', 'useNames');
 		$f->label = __('Use names/paths rather than ids in export/import json (Experimental)', __FILE__);
 		$f->description = __('If checked, all exports will reference names/paths rather than ids and all imports will expect names/paths*.', __FILE__);
-		$f->notes = __('If checked, this will apply to individual module export/imports and to multiple settings (below), but NOT to automatic backup settings. (* Imports using ids might work but cannot be guaranteed.)', __FILE__);
+		$f->notes = __('If checked, this will apply to individual module export/imports and to multiple settings (below), but NOT to backup settings. (* Imports using ids might work but cannot be guaranteed.)', __FILE__);
 		$f->attr('checked', $data['useNames'] == '1' ? 'checked' : '' );
 		$wrapper->add($f);
 
@@ -456,7 +456,7 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 				$params = $methodChecker->getParameters();
 				if(!$params[0]) return $json;
 				if(!$params[0]->getType()) {
-					$this->error("Module $moduleName does not have a getModuleConfigInputfields method that accepts a specified parameter type - InputfieldWrapper assumed");
+					$this->warning("Module $moduleName does not have a getModuleConfigInputfields method that accepts a specified parameter type - InputfieldWrapper assumed");
 				}
 				if($params[0]->getType() && $params[0]->getType()->getName() == 'array') {
 					$wrap = $module->getModuleConfigInputfields([]);
@@ -492,7 +492,8 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 				(?=[,}]): Positive lookahead to ensure that the match is followed by either a comma or a closing curly brace.
 				This ensures that the value is properly terminated in the JSON structure.
 				*/
-				$pattern = '/"([^"]+)":\s*"?([a-zA-Z0-9\/_-]+)"?(?=[,}])/';
+//				$pattern = '/"([^"]+)":\s*"?([a-zA-Z0-9\/_-]+)"?(?=[,}])/';
+				$pattern = '/"([^"]+)":\s*"?([a-zA-Z0-9\/_-]+|\["(?:[a-zA-Z0-9\/_-]+(?:","[a-zA-Z0-9\/_-]+)*)"\])"?(?=[,}])/';
 			}
 			// find all matches
 			preg_match_all($pattern, $json, $matches, PREG_SET_ORDER);
