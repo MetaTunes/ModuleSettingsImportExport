@@ -529,7 +529,7 @@ class ModuleSettingsImportExport extends WireData implements Module, Configurabl
 					([a-zA-Z0-9\/_-]+(?:\|[a-zA-Z0-9\/_-]+)*): Matches one or more alphanumeric characters, slashes, hyphens, or underscores, followed by zero or more occurrences of | and similar characters. This captures the yyy part.
 					(?=[,"]): Positive lookahead to ensure that the match is followed by a comma or a double quote.
 					This pattern ensures that yyy can be a single alphanumeric string or a pipe-separated list of such strings. */
-					$pattern = '/"?([^",]+?)"?\s*(=|!=)\s*([a-zA-Z0-9\/_-]+(?:\|[a-zA-Z0-9\/_-]+)*)(?=[,"]/$)/';
+					$pattern = '/"?([^",]+?)"?\s*(=|!=)\s*([a-zA-Z0-9\/_-]+(?:\|[a-zA-Z0-9\/_-]+)*)(?=[,"]|$)/';
 				}
 				// Find all matches
 				preg_match_all($pattern, $value, $matches, PREG_SET_ORDER);
